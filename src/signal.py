@@ -1,19 +1,51 @@
-# Generated from the research notebook: SIC copy.ipynb
-# Project: Momentum Trading Strategy
-# NOTE: This file preserves the research logic from the notebook.
-# It is intended for the repository and may require local data/configuration.
+"""
+Construcción del universo SIC y dataset histórico.
 
+Entrada:
+    data/infoDownload.csv
 
-# ============================================================
-# NOTEBOOK CELL 0
-# ============================================================
+Salidas:
+    data/universo.csv
+    data/datos_sic.csv
+
+El objetivo es reproducir la lógica utilizada en la investigación:
+    SIC -> validación Yahoo -> filtro de liquidez 80%
+    -> histórico de 2 años -> mínimo 450 observaciones
+    -> dataset con Momentum 20D.
+"""
+
+from pathlib import Path
+
+import numpy as np
 import pandas as pd
+import yfinance as yf
+
+
 # ============================================================
-# SIC → TICKERS YAHOO
+# CONFIGURACIÓN
 # ============================================================
+
+BASE_DIR = Path(__file__).resolve().parents[1]
+
+ARCHIVO_SIC = BASE_DIR / "data" / "infoDownload.csv"
+ARCHIVO_UNIVERSO = BASE_DIR / "data" / "universo.csv"
+ARCHIVO_DATOS = BASE_DIR / "data" / "datos_sic.csv"
+
+UMBRAL_LIQUIDEZ = 0.80
+MIN_OBSERVACIONES = 450
+PERIODO_HISTORICO = "2y"
+
+
+# ============================================================
+# 1. CARGAR SIC
+# ============================================================
+
+print("=" * 70)
+print("1. CARGANDO SIC")
+print("=" * 70)
 
 sic = pd.read_csv(
-    "infoDownload.csv",
+    ARCHIVO_SIC,
     encoding="utf-8-sig"
 )
 
@@ -34,37 +66,16 @@ sic["Ticker_Yahoo"] = (
     .fillna("")
 )
 
-print("Emisoras:", len(sic))
+print(f"Emisoras SIC: {len(sic)}")
 
-print("\nEjemplos:")
-print(
-    sic[
-        [
-            "CLAVE EMISORA",
-            "RAZON SOCIAL",
-            "BOLSA DONDE COTIZA",
-            "Ticker_Yahoo"
-        ]
-    ].head(30)
-)
-
-print("\nBolsas sin equivalencia:")
-print(
-    sic.loc[
-        ~sic["BOLSA DONDE COTIZA"].str.strip().str.upper().isin(
-            sufijos.keys()
-        ),
-        "BOLSA DONDE COTIZA"
-    ].value_counts()
-)
 
 # ============================================================
-# NOTEBOOK CELL 1
+# 2. VALIDAR TICKERS EN YAHOO
 # ============================================================
-import yfinance as yf
-# ============================================================
-# VALIDAR TICKERS SIC EN YAHOO — DESCARGA MASIVA
-# ============================================================
+
+print("\n" + "=" * 70)
+print("2. VALIDANDO TICKERS EN YAHOO")
+print("=" * 70)
 
 tickers_sic = (
     sic["Ticker_Yahoo"]
@@ -87,7 +98,6 @@ validos = []
 no_encontrados = []
 
 for ticker in tickers_sic:
-
     try:
         datos_ticker = datos_yahoo[ticker]
 
@@ -99,93 +109,30 @@ for ticker in tickers_sic:
     except (KeyError, TypeError):
         no_encontrados.append(ticker)
 
-print("\n================================")
-print("VALIDACIÓN YAHOO")
-print("================================")
-print(f"Candidatos:      {len(tickers_sic)}")
-print(f"Encontrados:     {len(validos)}")
-print(f"No encontrados:  {len(no_encontrados)}")
+print(f"Candidatos:     {len(tickers_sic)}")
+print(f"Con datos:      {len(validos)}")
+print(f"Sin datos:      {len(no_encontrados)}")
 
-print("\nPrimeros encontrados:")
-print(validos[:20])
-
-print("\nPrimeros no encontrados:")
-print(no_encontrados[:20])
-
-# ============================================================
-# NOTEBOOK CELL 2
-# ============================================================
-# ============================================================
-# REVISIÓN DE LA DESCARGA MASIVA
-# ============================================================
-
-print("Columnas descargadas:", len(datos_yahoo.columns))
-
-# Verificar algunos tickers que sabemos que deberían existir
-for ticker in ["AAPL", "AMZN", "MSFT", "TSLA"]:
-    try:
-        print(
-            ticker,
-            "->",
-            datos_yahoo[ticker].dropna(how="all").shape
-        )
-    except KeyError:
-        print(ticker, "-> NO ESTÁ EN LA DESCARGA")
-
-# Tickers que realmente aparecen en la descarga
-tickers_descargados = set(
-    datos_yahoo.columns.get_level_values(0)
-)
-
-print("\nTickers en descarga:", len(tickers_descargados))
-
-# ============================================================
-# NOTEBOOK CELL 3
-# ============================================================
-# ============================================================
-# VALIDACIÓN REAL DEL UNIVERSO SIC
-# ============================================================
-
-validos = []
-no_encontrados = []
-
-for ticker in tickers_sic:
-
-    datos_ticker = datos_yahoo[ticker]
-
-    if datos_ticker["Close"].notna().any():
-        validos.append(ticker)
-    else:
-        no_encontrados.append(ticker)
-
-print("================================")
-print("VALIDACIÓN REAL")
-print("================================")
-print(f"Candidatos:       {len(tickers_sic)}")
-print(f"Con datos:        {len(validos)}")
-print(f"Sin datos:        {len(no_encontrados)}")
-
-# Guardamos solamente los candidatos válidos
 sic_validos = sic[
     sic["Ticker_Yahoo"].isin(validos)
 ].copy()
 
-print("\nEmisoras SIC válidas:", len(sic_validos))
+print(f"SIC válidos:    {len(sic_validos)}")
 
-print("\nDistribución por bolsa:")
-print(
-    sic_validos["BOLSA DONDE COTIZA"]
-    .value_counts()
+
+# ============================================================
+# 3. LIQUIDEZ
+# ============================================================
+
+print("\n" + "=" * 70)
+print("3. CALCULANDO LIQUIDEZ")
+print("=" * 70)
+
+tickers_validos = (
+    sic_validos["Ticker_Yahoo"]
+    .drop_duplicates()
+    .tolist()
 )
-
-# ============================================================
-# NOTEBOOK CELL 4
-# ============================================================
-# ============================================================
-# LIQUIDEZ DEL UNIVERSO SIC
-# ============================================================
-
-tickers_validos = sic_validos["Ticker_Yahoo"].tolist()
 
 datos_liquidez = yf.download(
     tickers_validos,
@@ -200,13 +147,12 @@ datos_liquidez = yf.download(
 liquidez = []
 
 for ticker in tickers_validos:
-
     try:
         temp = datos_liquidez[ticker][
             ["Close", "Volume"]
         ].dropna()
 
-        if len(temp) == 0:
+        if temp.empty:
             continue
 
         volumen_dolares = (
@@ -214,7 +160,7 @@ for ticker in tickers_validos:
         )
 
         liquidez.append({
-            "Ticker": ticker,
+            "Ticker_Yahoo": ticker,
             "Volumen_Dolares_Medio": volumen_dolares.mean(),
             "Dias": len(temp)
         })
@@ -224,83 +170,40 @@ for ticker in tickers_validos:
 
 liquidez = pd.DataFrame(liquidez)
 
-# Unir con la información original del SIC
 sic_liquidez = sic_validos.merge(
     liquidez,
-    left_on="Ticker_Yahoo",
-    right_on="Ticker",
+    on="Ticker_Yahoo",
     how="inner"
 )
 
-print("================================")
-print("LIQUIDEZ SIC")
-print("================================")
-print(
-    sic_liquidez[
-        "Volumen_Dolares_Medio"
-    ].describe(
-        percentiles=[
-            .50,
-            .75,
-            .80,
-            .90,
-            .95,
-            .99
-        ]
-    )
-)
-
-# ============================================================
-# NOTEBOOK CELL 5
-# ============================================================
-# ============================================================
-# FILTRO DE LIQUIDEZ — SIC
-# ============================================================
-
 umbral_liquidez = sic_liquidez[
     "Volumen_Dolares_Medio"
-].quantile(0.80)
+].quantile(UMBRAL_LIQUIDEZ)
 
 sic_filtrado = sic_liquidez[
     sic_liquidez["Volumen_Dolares_Medio"] >= umbral_liquidez
 ].copy()
 
-print("================================")
-print("UNIVERSO SIC FILTRADO")
-print("================================")
-print("Umbral:", f"${umbral_liquidez:,.2f}")
-print("Emisoras:", len(sic_filtrado))
-
-print("\nDistribución por bolsa:")
 print(
-    sic_filtrado[
-        "BOLSA DONDE COTIZA"
-    ].value_counts()
+    f"Percentil de liquidez: {UMBRAL_LIQUIDEZ:.0%}"
 )
 
-print("\nMayor volumen:")
 print(
-    sic_filtrado[
-        [
-            "Ticker_Yahoo",
-            "RAZON SOCIAL",
-            "BOLSA DONDE COTIZA",
-            "Volumen_Dolares_Medio"
-        ]
-    ]
-    .sort_values(
-        "Volumen_Dolares_Medio",
-        ascending=False
-    )
-    .head(20)
+    f"Umbral: ${umbral_liquidez:,.2f}"
 )
 
+print(
+    f"Después del filtro: {len(sic_filtrado)}"
+)
+
+
 # ============================================================
-# NOTEBOOK CELL 6
+# 4. DESCARGAR HISTÓRICO
 # ============================================================
-# ============================================================
-# HISTÓRICOS SIC — 2 AÑOS
-# ============================================================
+
+print("\n" + "=" * 70)
+print("4. DESCARGANDO HISTÓRICOS")
+print("=" * 70)
 
 tickers_sic_final = (
     sic_filtrado["Ticker_Yahoo"]
@@ -308,11 +211,9 @@ tickers_sic_final = (
     .tolist()
 )
 
-print("Emisoras a descargar:", len(tickers_sic_final))
-
 historicos_sic = yf.download(
     tickers_sic_final,
-    period="2y",
+    period=PERIODO_HISTORICO,
     interval="1d",
     auto_adjust=False,
     progress=True,
@@ -320,14 +221,9 @@ historicos_sic = yf.download(
     group_by="ticker"
 )
 
-# ============================================================
-# CONVERTIR A FORMATO LONG
-# ============================================================
-
 datos_sic = []
 
 for ticker in tickers_sic_final:
-
     try:
         temp = historicos_sic[ticker].copy()
 
@@ -346,38 +242,24 @@ for ticker in tickers_sic_final:
     except (KeyError, TypeError):
         continue
 
+if not datos_sic:
+    raise RuntimeError(
+        "Yahoo Finance no devolvió históricos válidos."
+    )
+
 df_sic = pd.concat(
     datos_sic,
     ignore_index=True
 )
 
-# ============================================================
-# RESUMEN
-# ============================================================
-
-print("\n================================")
-print("HISTÓRICOS SIC")
-print("================================")
-
-print("Observaciones:", len(df_sic))
-print("Acciones:", df_sic["Ticker"].nunique())
-print("Inicio:", df_sic["Date"].min())
-print("Fin:", df_sic["Date"].max())
-
-print("\nObservaciones por acción:")
-print(
-    df_sic
-    .groupby("Ticker")
-    .size()
-    .describe()
-)
 
 # ============================================================
-# NOTEBOOK CELL 7
+# 5. CALIDAD DEL HISTÓRICO
 # ============================================================
-# ============================================================
-# CALIDAD DEL HISTÓRICO
-# ============================================================
+
+print("\n" + "=" * 70)
+print("5. VALIDANDO HISTÓRICOS")
+print("=" * 70)
 
 observaciones = (
     df_sic
@@ -386,11 +268,8 @@ observaciones = (
     .reset_index(name="Observaciones")
 )
 
-# Exigir al menos 90% del historial
-min_observaciones = 450
-
 tickers_completos = observaciones.loc[
-    observaciones["Observaciones"] >= min_observaciones,
+    observaciones["Observaciones"] >= MIN_OBSERVACIONES,
     "Ticker"
 ]
 
@@ -398,33 +277,29 @@ df_sic = df_sic[
     df_sic["Ticker"].isin(tickers_completos)
 ].copy()
 
-print("================================")
-print("UNIVERSO DEFINITIVO")
-print("================================")
-print("Acciones:", df_sic["Ticker"].nunique())
-print("Observaciones:", len(df_sic))
-
-print("\nObservaciones por acción:")
 print(
-    df_sic
-    .groupby("Ticker")
-    .size()
-    .describe()
+    f"Observaciones mínimas requeridas: "
+    f"{MIN_OBSERVACIONES}"
 )
 
+print(
+    f"Acciones con histórico suficiente: "
+    f"{df_sic['Ticker'].nunique()}"
+)
+
+
 # ============================================================
-# NOTEBOOK CELL 8
+# 6. PREPARAR DATASET
 # ============================================================
-import numpy as np
-# ============================================================
-# PREPARACIÓN DEL DATASET SIC
-# ============================================================
+
+print("\n" + "=" * 70)
+print("6. CALCULANDO MOMENTUM")
+print("=" * 70)
 
 df_sic = df_sic.sort_values(
     ["Ticker", "Date"]
 ).reset_index(drop=True)
 
-# Retornos históricos
 df_sic["Retorno_1D"] = (
     df_sic.groupby("Ticker")["Close"]
     .pct_change(1)
@@ -440,12 +315,7 @@ df_sic["Retorno_20D"] = (
     .pct_change(20)
 )
 
-# ============================================================
-# RETORNOS FUTUROS
-# ============================================================
-
 for h in [1, 3, 5, 10, 20]:
-
     df_sic[f"Futuro_{h}D"] = (
         df_sic.groupby("Ticker")["Close"]
         .shift(-h)
@@ -453,24 +323,17 @@ for h in [1, 3, 5, 10, 20]:
         - 1
     )
 
-# ============================================================
-# MOMENTUM
-# ============================================================
-
-# Usamos 20 días como momentum de referencia,
-# igual que nuestra investigación original.
-
 df_sic["Momentum"] = (
     df_sic.groupby("Ticker")["Close"]
     .pct_change(20)
 )
 
+
 # ============================================================
-# CLASIFICACIÓN POR FECHA
+# 7. GRUPO DE MOMENTUM
 # ============================================================
 
 def clasificar_momentum(x):
-
     resultado = pd.Series(
         np.nan,
         index=x.index
@@ -479,7 +342,6 @@ def clasificar_momentum(x):
     validos = x.dropna()
 
     if len(validos) >= 3:
-
         grupos = pd.qcut(
             validos.rank(method="first"),
             3,
@@ -497,44 +359,84 @@ df_sic["Grupo_Momentum"] = (
     .transform(clasificar_momentum)
 )
 
+
 # ============================================================
-# RESULTADOS
+# 8. GUARDAR UNIVERSO
 # ============================================================
 
-resultado_sic = (
-    df_sic
-    .dropna(
-        subset=[
-            "Grupo_Momentum",
-            "Futuro_1D",
-            "Futuro_3D",
-            "Futuro_5D",
-            "Futuro_10D",
-            "Futuro_20D"
-        ]
-    )
-    .groupby("Grupo_Momentum")
-    .agg(
-        Observaciones=("Ticker", "count"),
-
-        Media_1D=("Futuro_1D", "mean"),
-        Mediana_1D=("Futuro_1D", "median"),
-
-        Media_3D=("Futuro_3D", "mean"),
-        Mediana_3D=("Futuro_3D", "median"),
-
-        Media_5D=("Futuro_5D", "mean"),
-        Mediana_5D=("Futuro_5D", "median"),
-
-        Media_10D=("Futuro_10D", "mean"),
-        Mediana_10D=("Futuro_10D", "median"),
-
-        Media_20D=("Futuro_20D", "mean"),
-        Mediana_20D=("Futuro_20D", "median")
-    )
+# Este es el universo definitivo utilizado por el estudio.
+universo = sic_filtrado[
+    [
+        "Ticker_Yahoo",
+        "CLAVE EMISORA",
+        "RAZON SOCIAL",
+        "BOLSA DONDE COTIZA",
+        "Volumen_Dolares_Medio"
+    ]
+].drop_duplicates(
+    subset=["Ticker_Yahoo"]
 )
 
-print("================================")
-print("REVERSIÓN — SIC")
-print("================================")
-print(resultado_sic)
+universo = universo[
+    universo["Ticker_Yahoo"].isin(
+        tickers_completos
+    )
+].copy()
+
+universo.to_csv(
+    ARCHIVO_UNIVERSO,
+    index=False,
+    encoding="utf-8-sig"
+)
+
+
+# ============================================================
+# 9. GUARDAR DATASET
+# ============================================================
+
+df_sic.to_csv(
+    ARCHIVO_DATOS,
+    index=False,
+    encoding="utf-8-sig"
+)
+
+
+# ============================================================
+# RESULTADO FINAL
+# ============================================================
+
+print("\n" + "=" * 70)
+print("RESULTADO FINAL")
+print("=" * 70)
+
+print(
+    f"Universo definitivo: "
+    f"{len(universo)} acciones"
+)
+
+print(
+    f"Observaciones históricas: "
+    f"{len(df_sic):,}"
+)
+
+print(
+    f"Fecha inicial: "
+    f"{df_sic['Date'].min()}"
+)
+
+print(
+    f"Fecha final: "
+    f"{df_sic['Date'].max()}"
+)
+
+print("\nArchivos generados:")
+
+print(
+    f"  {ARCHIVO_UNIVERSO}"
+)
+
+print(
+    f"  {ARCHIVO_DATOS}"
+)
+
+print("\nProceso terminado.")
